@@ -1,3 +1,18 @@
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Tạo một HTTP endpoint đơn giản để Render nhận biết dịch vụ
+app.get('/', (req, res) => {
+  res.send('MQTT to Firestore is running ✅');
+});
+
+// Khởi động HTTP server
+app.listen(port, () => {
+  console.log(`🌐 Web server is running on port ${port}`);
+});
+
+// ======== PHẦN GỐC: MQTT to Firestore =========
 const mqtt = require('mqtt');
 const admin = require('firebase-admin');
 const fs = require('fs');
@@ -6,10 +21,9 @@ const fs = require('fs');
 const serviceAccountBase64 = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const serviceAccountBuffer = Buffer.from(serviceAccountBase64, 'base64');
 const tempFilePath = '/tmp/service-account.json';
-
 fs.writeFileSync(tempFilePath, serviceAccountBuffer);
 
-// Khởi tạo Firebase Admin với tệp tạm thời
+// Khởi tạo Firebase Admin
 admin.initializeApp({
   credential: admin.credential.cert(tempFilePath),
 });
@@ -22,7 +36,6 @@ const mqttOptions = {
 };
 const client = mqtt.connect('mqtt://h.ceosz.com:1883', mqttOptions);
 
-// Khi kết nối MQTT thành công, subscribe các topic từ Firestore
 client.on('connect', async () => {
   console.log('✅ Connected to MQTT broker');
 
@@ -46,16 +59,12 @@ client.on('connect', async () => {
 
 client.on('message', async (topic, message) => {
   try {
-    // Extract modelId từ topic
     const topicParts = topic.split('/');
     const modelId = topicParts[2];
-
     const data = JSON.parse(message.toString());
 
-    // Chỉ xử lý nếu id là '60006'
     if (!data.id || data.id.toString() !== '60006') return;
 
-    // Lấy deviceId từ payload
     let deviceId = '';
     if (data.params && data.params.DetailMsg) {
       let detailObj = data.params.DetailMsg;
@@ -69,34 +78,31 @@ client.on('message', async (topic, message) => {
       }
     }
 
-    // Nếu không tìm thấy deviceId, bỏ qua và tiếp tục
     if (!deviceId) {
       console.warn('⚠️ Không tìm thấy deviceId trong payload:', data);
       return;
     }
 
-    // 🔍 Lookup userId từ models/{modelId}
     const modelMetaDoc = await db.collection('Models').doc(modelId).get();
     if (!modelMetaDoc.exists || !modelMetaDoc.data().userId) {
       console.error('❌ Không tìm thấy userId cho modelId:', modelId);
-      return;  // Bỏ qua nếu không tìm thấy userId
+      return;
     }
     const foundUserId = modelMetaDoc.data().userId;
 
-    // Tạo notification object
     const notification = {
-      'createdAt': new Date().toISOString(),
-      'deviceId': deviceId,
-      'id': data.id.toString(),
-      'method': data.method ? data.method.toString() : '',
-      'modelId': modelId,
-      'detailMsg': typeof data.params.DetailMsg === 'string'
-        ? data.params.DetailMsg
-        : JSON.stringify(data.params.DetailMsg),
-      'version': data.version ? data.version.toString() : '',
+      createdAt: new Date().toISOString(),
+      deviceId,
+      id: data.id.toString(),
+      method: data.method ? data.method.toString() : '',
+      modelId,
+      detailMsg:
+        typeof data.params.DetailMsg === 'string'
+          ? data.params.DetailMsg
+          : JSON.stringify(data.params.DetailMsg),
+      version: data.version ? data.version.toString() : '',
     };
 
-    // Firestore ref
     const deviceRef = db
       .collection('users')
       .doc(foundUserId)
@@ -105,19 +111,16 @@ client.on('message', async (topic, message) => {
       .collection('devices')
       .doc(deviceId);
 
-    // Lấy history hiện tại
     const doc = await deviceRef.get();
     let history = [];
     if (doc.exists && doc.data().notificationHistory) {
       history = doc.data().notificationHistory;
     }
 
-    // Thêm vào đầu mảng và giới hạn
     history.unshift(notification);
     const maxHistory = 50;
     history = history.slice(0, maxHistory);
 
-    // Cập nhật Firestore
     await deviceRef.set(
       {
         notificationHistory: history,
