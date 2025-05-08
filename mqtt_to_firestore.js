@@ -1,10 +1,17 @@
 const mqtt = require('mqtt');
 const admin = require('firebase-admin');
-const serviceAccount = require('./tte-safe-iot-firebase-adminsdk-fbsvc-0a628687ee.json');
+const fs = require('fs');
 
-// Khởi tạo Firebase Admin
+// Giải mã chuỗi Base64 từ biến môi trường và ghi vào tệp tạm thời
+const serviceAccountBase64 = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+const serviceAccountBuffer = Buffer.from(serviceAccountBase64, 'base64');
+const tempFilePath = '/tmp/service-account.json';
+
+fs.writeFileSync(tempFilePath, serviceAccountBuffer);
+
+// Khởi tạo Firebase Admin với tệp tạm thời
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert(tempFilePath),
 });
 const db = admin.firestore();
 
