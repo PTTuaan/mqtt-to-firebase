@@ -130,7 +130,68 @@ client.on('message', async (topic, message) => {
     );
 
     console.log(`✅ Notification saved for model ${modelId}, device ${deviceId}`);
+
+    const title = `Thông báo từ thiết bị ${deviceId}`;
+    const body = notification.detailMsg;
+    const fcmData = {
+      type: 'device_notification',
+      modelId: modelId,
+      deviceId: deviceId,
+      timestamp: notification.createdAt,
+    };
+
+    await sendFCMNotification(foundUserId, title, body, fcmData);
   } catch (err) {
     console.error('❌ Error processing MQTT message:', err);
   }
 });
+
+async function sendFCMNotification(userId, title, body, data) {
+  try {
+    // Lấy FCM tokens của user
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      console.error('❌ User not found:', userId);
+      return;
+    }
+
+    const fcmTokens = userDoc.data().fcmTokens || [];
+    if (fcmTokens.length === 0) {
+      console.log('⚠️ No FCM tokens found for user:', userId);
+      return;
+    }
+
+    // Tạo message
+    const message = {
+      notification: {
+        title: title,
+        body: body,
+      },
+      data: data,
+      tokens: fcmTokens,
+    };
+
+    // Gửi notification
+    const response = await admin.messaging().sendMulticast(message);
+    console.log('✅ FCM Notification sent:', response);
+    
+    // Xóa tokens không hợp lệ
+    if (response.failureCount > 0) {
+      const failedTokens = [];
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          failedTokens.push(fcmTokens[idx]);
+        }
+      });
+      
+      if (failedTokens.length > 0) {
+        await db.collection('users').doc(userId).update({
+          fcmTokens: admin.firestore.FieldValue.arrayRemove(...failedTokens)
+        });
+        console.log('🗑️ Removed invalid tokens:', failedTokens);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error sending FCM notification:', error);
+  }
+}
